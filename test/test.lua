@@ -385,3 +385,21 @@ test("decode number formats", function()
   assert(json.decode("1e-10") == 1e-10)
   assert(json.decode("-1.5e2") == -1.5e2)
 end)
+
+
+test("encode table shape errors", function()
+  local ok, err = pcall(json.encode, { [1] = "a", [3] = "b" })
+  assert(not ok)
+  assert(err:match("sparse array"), fmt("expected sparse array error, got: %s", err))
+
+  ok, err = pcall(json.encode, { x = 1, [1] = 2 })
+  assert(not ok)
+  assert(err:match("mixed or invalid key types"), fmt("expected key type error, got: %s", err))
+end)
+
+
+test("decode unicode surrogate pair", function()
+  local value = json.decode([["\ud83d\ude80"]])
+  assert(value == "🚀", fmt("expected rocket emoji, got: %s", value))
+  assert(json.decode(json.encode(value)) == value)
+end)
