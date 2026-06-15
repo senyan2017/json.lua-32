@@ -243,3 +243,145 @@ test("encode escape", function()
     assert( res == v, fmt("'%s' was not escaped properly", k) )
   end
 end)
+
+
+-- Regression tests for refactoring: error messages, edge cases, round-trips
+
+test("error line/col reporting", function()
+  -- Error at line 1 col 1 (empty input)
+  local ok, err = pcall(json.decode, "")
+  assert(not ok)
+  assert(err:match("line 1 col 1"), fmt("expected line 1 col 1, got: %s", err))
+
+  -- Error on second line
+  local ok, err = pcall(json.decode, '{\n"x": }')
+  assert(not ok)
+  assert(err:match("line 2"), fmt("expected line 2 error, got: %s", err))
+
+  -- Trailing garbage reports correct position
+  local ok, err = pcall(json.decode, '123 abc')
+  assert(not ok)
+  assert(err:match("trailing garbage"), fmt("expected trailing garbage, got: %s", err))
+end)
+
+
+test("circular reference detection", function()
+  local t = {}
+  t[1] = t
+  local ok, err = pcall(json.encode, t)
+  assert(not ok)
+  assert(err:match("circular reference"), fmt("expected circular reference, got: %s", err))
+end)
+
+
+test("deeply nested structures", function()
+  -- Build a deeply nested array: [[[[...1...]]]]
+  local depth = 50
+  local s = string.rep("[", depth) .. "1" .. string.rep("]", depth)
+  local res = json.decode(s)
+  -- Unwrap and verify
+  for i = 1, depth do
+    assert(type(res) == "table")
+    res = res[1]
+  end
+  assert(res == 1)
+
+  -- Round-trip: encode then decode
+  local deep = 1
+  for i = 1, depth do
+    deep = { deep }
+  end
+  local encoded = json.encode(deep)
+  local decoded = json.decode(encoded)
+  local val = decoded
+  for i = 1, depth do
+    val = val[1]
+  end
+  assert(val == 1)
+end)
+
+
+test("round-trip complex object", function()
+  local obj = {
+    name = "test",
+    version = 1.5,
+    active = true,
+    tags = { "a", "b", "c" },
+    nested = {
+      x = nil,
+      y = { z = "deep" },
+      list = { 1, 2, 3 },
+    },
+    empty_obj = {},
+    empty_arr = {},
+    unicode = "こんにちは",
+    special = "line1\nline2\ttab\\slash\"quote",
+  }
+  -- Note: empty tables default to array encoding, so empty_obj/empty_arr both become []
+  local encoded = json.encode(obj)
+  local decoded = json.decode(encoded)
+  assert(decoded.name == "test")
+  assert(decoded.version == 1.5)
+  assert(decoded.active == true)
+  assert(equal(decoded.tags, { "a", "b", "c" }))
+  assert(decoded.nested.y.z == "deep")
+  assert(equal(decoded.nested.list, { 1, 2, 3 }))
+  assert(decoded.unicode == "こんにちは")
+  assert(decoded.special == "line1\nline2\ttab\\slash\"quote")
+end)
+
+
+test("decode whitespace handling", function()
+  -- Various whitespace around tokens
+  assert(json.decode("  42  ") == 42)
+  assert(json.decode("\t\n\r 42 \t\n\r") == 42)
+  assert(equal(json.decode("  [ 1 , 2 , 3 ]  "), {1, 2, 3}))
+  assert(equal(json.decode('  {  "a"  :  1  ,  "b"  :  2  }  '), {a = 1, b = 2}))
+end)
+
+
+test("encode type error messages", function()
+  local ok, err = pcall(json.encode, function() end)
+  assert(not ok)
+  assert(err:match("unexpected type 'function'"),
+    fmt("expected unexpected type error, got: %s", err))
+end)
+
+
+test("decode non-string argument", function()
+  local ok, err = pcall(json.decode, 123)
+  assert(not ok)
+  assert(err:match("expected argument of type string"),
+    fmt("expected type error, got: %s", err))
+
+  local ok, err = pcall(json.decode, nil)
+  assert(not ok)
+  assert(err:match("expected argument of type string"))
+end)
+
+
+test("encode number edge cases", function()
+  assert(json.encode(0) == "0")
+  assert(json.encode(-0) == "0" or json.encode(-0) == "-0")  -- platform dependent
+  assert(json.encode(1e100) == "1e+100" or json.encode(1e100) == "1e100"
+    or json.encode(1e100) == "1.0e+100"
+    or json.encode(1e100) == "1e100")
+  -- Just verify it round-trips for reasonable numbers
+  local nums = { 0.1, -0.1, 123456789, -123456789, 0.000001 }
+  for _, n in ipairs(nums) do
+    local decoded = json.decode(json.encode(n))
+    assert(decoded == n, fmt("round-trip failed for %s", n))
+  end
+end)
+
+
+test("decode number formats", function()
+  assert(json.decode("0") == 0)
+  assert(json.decode("-0") == 0)
+  assert(json.decode("1e10") == 1e10)
+  assert(json.decode("1E10") == 1e10)
+  assert(json.decode("1e+10") == 1e10)
+  assert(json.decode("1E+10") == 1e10)
+  assert(json.decode("1e-10") == 1e-10)
+  assert(json.decode("-1.5e2") == -1.5e2)
+end)
