@@ -137,6 +137,113 @@ end
 
 
 -------------------------------------------------------------------------------
+-- Encode Pretty
+-------------------------------------------------------------------------------
+
+local encode_pretty
+
+local function sorted_keys(t)
+  local keys = {}
+  for k in pairs(t) do
+    table.insert(keys, k)
+  end
+  table.sort(keys)
+  return keys
+end
+
+
+local function encode_pretty_table(val, opts, level, stack)
+  local res = {}
+  stack = stack or {}
+
+  -- Circular reference?
+  if stack[val] then error("circular reference") end
+
+  stack[val] = true
+
+  local indent_str = opts._indent
+  local newline_str = opts._newline
+  local sep_str = opts._separator
+
+  if rawget(val, 1) ~= nil or next(val) == nil then
+    -- Treat as array -- check keys are valid and it is not sparse
+    local n = 0
+    for k in pairs(val) do
+      if type(k) ~= "number" then
+        error("invalid table: mixed or invalid key types")
+      end
+      n = n + 1
+    end
+    if n ~= #val then
+      error("invalid table: sparse array")
+    end
+    -- Encode array
+    if n == 0 then
+      stack[val] = nil
+      return "[]"
+    end
+    local inner_indent = indent_str:rep(level + 1)
+    local outer_indent = indent_str:rep(level)
+    for i, v in ipairs(val) do
+      table.insert(res, inner_indent .. encode_pretty(v, opts, level + 1, stack))
+    end
+    stack[val] = nil
+    return "[" .. newline_str .. table.concat(res, "," .. newline_str) .. newline_str .. outer_indent .. "]"
+
+  else
+    -- Treat as an object
+    local keys = sorted_keys(val)
+    if #keys == 0 then
+      stack[val] = nil
+      return "{}"
+    end
+    local inner_indent = indent_str:rep(level + 1)
+    local outer_indent = indent_str:rep(level)
+    for _, k in ipairs(keys) do
+      if type(k) ~= "string" then
+        error("invalid table: mixed or invalid key types")
+      end
+      local key_str = encode(k, nil)
+      local val_str = encode_pretty(val[k], opts, level + 1, stack)
+      table.insert(res, inner_indent .. key_str .. sep_str .. val_str)
+    end
+    stack[val] = nil
+    return "{" .. newline_str .. table.concat(res, "," .. newline_str) .. newline_str .. outer_indent .. "}"
+  end
+end
+
+
+local encode_pretty_type_map = {
+  [ "nil"     ] = function() return "null" end,
+  [ "string"  ] = function(val) return encode(val) end,
+  [ "number"  ] = function(val) return encode(val) end,
+  [ "boolean" ] = function(val) return tostring(val) end,
+  [ "table"   ] = encode_pretty_table,
+}
+
+
+encode_pretty = function(val, opts, level, stack)
+  local t = type(val)
+  local f = encode_pretty_type_map[t]
+  if f then
+    return f(val, opts, level, stack)
+  end
+  error("unexpected type '" .. t .. "'")
+end
+
+
+function json.encode_pretty(val, opts)
+  opts = opts or {}
+  local resolved = {
+    _indent    = opts.indent    or "  ",
+    _newline   = opts.newline   or "\n",
+    _separator = opts.separator or ": ",
+  }
+  return ( encode_pretty(val, resolved, 0) )
+end
+
+
+-------------------------------------------------------------------------------
 -- Decode
 -------------------------------------------------------------------------------
 

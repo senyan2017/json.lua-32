@@ -24,6 +24,31 @@ Returns a string representing `value` encoded in JSON.
 json.encode({ 1, 2, 3, { x = 10 } }) -- Returns '[1,2,3,{"x":10}]'
 ```
 
+#### json.encode_pretty(value, [opts])
+Returns a string representing `value` encoded in a human-readable JSON format
+with indentation and newlines. Object keys are sorted alphabetically for
+stable output. The optional `opts` table supports:
+* `indent` — string for one indentation level (default `"  "` — 2 spaces)
+* `newline` — string for line breaks (default `"\n"`)
+* `separator` — string between key and value (default `": "`)
+```lua
+json.encode_pretty({ name = "John", age = 30, hobbies = {"reading", "coding"} })
+-- Returns:
+-- {
+--   "age": 30,
+--   "hobbies": [
+--     "reading",
+--     "coding"
+--   ],
+--   "name": "John"
+-- }
+
+-- Custom indentation (4 spaces):
+json.encode_pretty(val, { indent = "    " })
+-- Tab indentation:
+json.encode_pretty(val, { indent = "\t" })
+```
+
 #### json.decode(str)
 Returns a value representing the decoded JSON string.
 ```lua
@@ -36,8 +61,8 @@ json.decode('[1,2,3,{"x":10}]') -- Returns { 1, 2, 3, { x = 10 } }
   or invalid numbers (NaN, -inf, inf) will raise an error
 * `null` values contained within an array or object are converted to `nil` and
   are therefore lost upon decoding
-* *Pretty* encoding is not supported, `json.encode()` only encodes to a compact
-  format
+* `json.encode()` always produces compact output; use `json.encode_pretty()`
+  for a human-readable format
 
 
 ## License

@@ -243,3 +243,161 @@ test("encode escape", function()
     assert( res == v, fmt("'%s' was not escaped properly", k) )
   end
 end)
+
+
+-------------------------------------------------------------------------------
+-- Pretty Encode Tests
+-------------------------------------------------------------------------------
+
+test("pretty encode scalars", function()
+  assert( json.encode_pretty(42) == "42" )
+  assert( json.encode_pretty(0) == "0" )
+  assert( json.encode_pretty(-3.14) == "-3.14" )
+  assert( json.encode_pretty("hello") == [["hello"]] )
+  assert( json.encode_pretty("") == [[""]] )
+  assert( json.encode_pretty(true) == "true" )
+  assert( json.encode_pretty(false) == "false" )
+  assert( json.encode_pretty(nil) == "null" )
+end)
+
+
+test("pretty encode empty", function()
+  -- Empty table encodes as empty array (consistent with compact encode)
+  assert( json.encode_pretty({}) == "[]" )
+end)
+
+
+test("pretty encode array", function()
+  local res = json.encode_pretty({ 1, 2, 3 })
+  local expected = "[\n  1,\n  2,\n  3\n]"
+  assert( res == expected, fmt("expected:\n%s\ngot:\n%s", expected, res) )
+end)
+
+
+test("pretty encode nested array", function()
+  local res = json.encode_pretty({ {1, 2}, {3, 4} })
+  local expected = "[\n  [\n    1,\n    2\n  ],\n  [\n    3,\n    4\n  ]\n]"
+  assert( res == expected, fmt("expected:\n%s\ngot:\n%s", expected, res) )
+end)
+
+
+test("pretty encode object", function()
+  local res = json.encode_pretty({ x = 10, y = 20 })
+  -- Keys must be sorted alphabetically
+  local expected = '{\n  "x": 10,\n  "y": 20\n}'
+  assert( res == expected, fmt("expected:\n%s\ngot:\n%s", expected, res) )
+end)
+
+
+test("pretty encode key order stable", function()
+  -- Two tables with same content but different insertion order must match
+  local a = { z = 1, a = 2, m = 3 }
+  local b = { a = 2, m = 3, z = 1 }
+  assert( json.encode_pretty(a) == json.encode_pretty(b),
+          "pretty encode output is not stable for same object content" )
+  -- Verify alphabetical order
+  local res = json.encode_pretty(a)
+  local ai = res:find('"a"')
+  local mi = res:find('"m"')
+  local zi = res:find('"z"')
+  assert( ai < mi and mi < zi, "keys are not in alphabetical order" )
+end)
+
+
+test("pretty encode nested object", function()
+  local val = { name = "test", info = { id = 1, active = true } }
+  local res = json.encode_pretty(val)
+  assert( res:find('"active"') < res:find('"id"'), "nested keys not sorted" )
+  assert( res:find('"id"') < res:find('"name"'), "top-level keys not sorted" )
+  -- Round-trip: decode pretty output must match original
+  local decoded = json.decode(res)
+  assert( decoded.name == "test" )
+  assert( decoded.info.id == 1 )
+  assert( decoded.info.active == true )
+end)
+
+
+test("pretty encode mixed", function()
+  local val = { items = { 1, 2, 3 }, label = "data" }
+  local res = json.encode_pretty(val)
+  -- Decode and verify
+  local decoded = json.decode(res)
+  assert( equal(decoded, val), "round-trip failed for mixed array/object" )
+end)
+
+
+test("pretty encode custom indent", function()
+  -- 4-space indent
+  local res = json.encode_pretty({ a = 1 }, { indent = "    " })
+  assert( res:find("    \"a\"") ~= nil, "custom 4-space indent not applied" )
+
+  -- Tab indent
+  local res = json.encode_pretty({ a = 1 }, { indent = "\t" })
+  assert( res:find("\t\"a\"") ~= nil, "custom tab indent not applied" )
+end)
+
+
+test("pretty encode custom newline", function()
+  local res = json.encode_pretty({ 1, 2 }, { newline = "\r\n" })
+  assert( res:find("\r\n") ~= nil, "custom newline not applied" )
+end)
+
+
+test("pretty encode custom separator", function()
+  local res = json.encode_pretty({ a = 1 }, { separator = ":" })
+  assert( res:find('"a":1') ~= nil, "custom separator not applied" )
+end)
+
+
+test("pretty encode deep nesting", function()
+  local val = { a = { b = { c = { d = "deep" } } } }
+  local res = json.encode_pretty(val)
+  -- Check indentation levels: d should be at 4 levels = 8 spaces
+  assert( res:find("        \"d\"") ~= nil, "deep nesting indentation wrong" )
+  -- Round-trip
+  local decoded = json.decode(res)
+  assert( equal(decoded, val), "round-trip failed for deep nesting" )
+end)
+
+
+test("pretty encode invalid", function()
+  local t = {
+    { [1000] = "b" },          -- sparse array
+    { [function() end] = 12 }, -- invalid key type
+    { nil, 2, 3, 4 },          -- sparse array
+    { x = 10, [1] = 2 },       -- mixed key types
+  }
+  for i, v in ipairs(t) do
+    local status = pcall(json.encode_pretty, v)
+    assert( not status, fmt("pretty encoding idx %d did not result in an error", i) )
+  end
+end)
+
+
+test("pretty encode invalid number", function()
+  local t = {
+    math.huge,      -- inf
+    -math.huge,     -- -inf
+    math.huge * 0,  -- NaN
+  }
+  for i, v in ipairs(t) do
+    local status = pcall(json.encode_pretty, v)
+    assert( not status, fmt("pretty encoding '%s' did not result in an error", v) )
+  end
+end)
+
+
+test("pretty encode circular", function()
+  local t = {}
+  t.self = t
+  local status = pcall(json.encode_pretty, t)
+  assert( not status, "circular reference was not detected" )
+end)
+
+
+test("pretty encode preserves compact", function()
+  -- Ensure json.encode is not affected by encode_pretty
+  local compact = json.encode({ 1, 2, 3, { x = 10 } })
+  assert( compact == '[1,2,3,{"x":10}]',
+          fmt("compact encode changed: got '%s'", compact) )
+end)
