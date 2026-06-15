@@ -131,8 +131,127 @@ encode = function(val, stack)
 end
 
 
-function json.encode(val)
-  return ( encode(val) )
+local encode_pretty
+
+
+local function encode_table_pretty(val, stack, opts, depth)
+  local res = {}
+  stack = stack or {}
+
+  -- Circular reference?
+  if stack[val] then error("circular reference") end
+
+  stack[val] = true
+
+  local indent = opts.indent
+  local newline = opts.newline
+  local item_indent = indent:rep(depth + 1)
+  local close_indent = indent:rep(depth)
+
+  if rawget(val, 1) ~= nil or next(val) == nil then
+    -- Treat as array -- check keys are valid and it is not sparse
+    local n = 0
+    for k in pairs(val) do
+      if type(k) ~= "number" then
+        error("invalid table: mixed or invalid key types")
+      end
+      n = n + 1
+    end
+    if n ~= #val then
+      error("invalid table: sparse array")
+    end
+    -- An empty table encodes the same as in the compact form
+    if n == 0 then
+      stack[val] = nil
+      return "[]"
+    end
+    -- Encode, placing one element per line
+    for i, v in ipairs(val) do
+      res[i] = item_indent .. encode_pretty(v, stack, opts, depth + 1)
+    end
+    stack[val] = nil
+    return "[" .. newline
+      .. table.concat(res, "," .. newline)
+      .. newline .. close_indent .. "]"
+
+  else
+    -- Treat as an object -- sort keys so the output is stable across runs,
+    -- which keeps snapshots and diffs sane
+    local keys = {}
+    for k in pairs(val) do
+      if type(k) ~= "string" then
+        error("invalid table: mixed or invalid key types")
+      end
+      keys[#keys + 1] = k
+    end
+    table.sort(keys)
+    for i, k in ipairs(keys) do
+      res[i] = item_indent .. encode_string(k) .. ": "
+        .. encode_pretty(val[k], stack, opts, depth + 1)
+    end
+    stack[val] = nil
+    return "{" .. newline
+      .. table.concat(res, "," .. newline)
+      .. newline .. close_indent .. "}"
+  end
+end
+
+
+encode_pretty = function(val, stack, opts, depth)
+  local t = type(val)
+  if t == "table" then
+    return encode_table_pretty(val, stack, opts, depth)
+  end
+  -- Scalars encode identically to the compact form
+  local f = type_func_map[t]
+  if f then
+    return f(val)
+  end
+  error("unexpected type '" .. t .. "'")
+end
+
+
+local function resolve_indent(indent)
+  if indent == nil then
+    return "  "
+  elseif type(indent) == "number" then
+    if indent < 0 or indent ~= math.floor(indent) then
+      error("indent must be a non-negative integer or a string")
+    end
+    return string.rep(" ", indent)
+  elseif type(indent) == "string" then
+    return indent
+  end
+  error("indent must be a non-negative integer or a string")
+end
+
+
+function json.encode(val, opts)
+  -- Fast path: no options means the original compact encoder, unchanged
+  if opts == nil then
+    return ( encode(val) )
+  end
+  if type(opts) == "boolean" then
+    -- `json.encode(val, true)` is shorthand for pretty output with defaults
+    if not opts then
+      return ( encode(val) )
+    end
+    opts = { pretty = true }
+  elseif type(opts) ~= "table" then
+    error("expected opts to be a table or boolean, got " .. type(opts))
+  end
+  -- Pretty mode is enabled explicitly or implied by an indent/newline override
+  if not (opts.pretty or opts.indent ~= nil or opts.newline ~= nil) then
+    return ( encode(val) )
+  end
+  local newline = opts.newline
+  if newline == nil then
+    newline = "\n"
+  elseif type(newline) ~= "string" then
+    error("newline must be a string")
+  end
+  local resolved = { indent = resolve_indent(opts.indent), newline = newline }
+  return ( encode_pretty(val, nil, resolved, 0) )
 end
 
 

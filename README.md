@@ -18,10 +18,29 @@ json = require "json"
 ```
 The library provides the following functions:
 
-#### json.encode(value)
+#### json.encode(value [, opts])
 Returns a string representing `value` encoded in JSON.
 ```lua
 json.encode({ 1, 2, 3, { x = 10 } }) -- Returns '[1,2,3,{"x":10}]'
+```
+Pass `true` (or an options table) as the second argument to get *pretty*,
+human-readable output with indentation, newlines and stable (sorted) object
+keys -- handy for config files, logs and reviewing diffs:
+```lua
+json.encode({ x = 1, y = 2 }, true)
+-- Returns:
+-- {
+--   "x": 1,
+--   "y": 2
+-- }
+```
+The compact, single-line output is unaffected and remains the default. The
+options table accepts:
+* `pretty` &mdash; enable pretty output (implied when `indent`/`newline` is given)
+* `indent` &mdash; a string, or a number of spaces, used per nesting level (default `2`)
+* `newline` &mdash; the line separator (default `"\n"`)
+```lua
+json.encode({ a = 1 }, { indent = "\t", newline = "\r\n" })
 ```
 
 #### json.decode(str)
@@ -36,8 +55,9 @@ json.decode('[1,2,3,{"x":10}]') -- Returns { 1, 2, 3, { x = 10 } }
   or invalid numbers (NaN, -inf, inf) will raise an error
 * `null` values contained within an array or object are converted to `nil` and
   are therefore lost upon decoding
-* *Pretty* encoding is not supported, `json.encode()` only encodes to a compact
-  format
+* *Pretty* encoding is opt-in: `json.encode(value)` encodes to a compact format
+  by default, while `json.encode(value, true)` (or an options table) produces
+  indented, human-readable output with stable object key ordering
 
 
 ## License

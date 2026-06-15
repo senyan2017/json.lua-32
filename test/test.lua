@@ -243,3 +243,110 @@ test("encode escape", function()
     assert( res == v, fmt("'%s' was not escaped properly", k) )
   end
 end)
+
+
+test("encode compact unchanged", function()
+  -- The default (no opts) compact encoder must keep its exact output
+  assert( json.encode({ 1, 2, 3, { x = 10 } }) == '[1,2,3,{"x":10}]' )
+  assert( json.encode({ x = 10 }) == '{"x":10}' )
+  assert( json.encode(123.456) == "123.456" )
+  assert( json.encode("a\nb") == [["a\nb"]] )
+  -- A falsy/empty opts argument is treated as compact too
+  assert( json.encode({ 1, 2, 3, { x = 10 } }, false) == '[1,2,3,{"x":10}]' )
+  assert( json.encode({ 1, 2, 3, { x = 10 } }, {}) == '[1,2,3,{"x":10}]' )
+  -- Compact output never contains pretty-printing whitespace
+  local res = json.encode({ a = 1, b = 2, c = 3, d = { 4, 5 } })
+  assert( not res:find("\n"), "compact output should not contain newlines" )
+end)
+
+
+test("encode pretty basic", function()
+  assert( json.encode({ a = 1, b = 2, c = 3 }, true)
+    == '{\n  "a": 1,\n  "b": 2,\n  "c": 3\n}' )
+  assert( json.encode({ 1, 2, 3 }, true)
+    == '[\n  1,\n  2,\n  3\n]' )
+  assert( json.encode({ x = { y = 1 } }, true)
+    == '{\n  "x": {\n    "y": 1\n  }\n}' )
+  assert( json.encode({ name = "John", nums = { 1, 2 } }, true)
+    == '{\n  "name": "John",\n  "nums": [\n    1,\n    2\n  ]\n}' )
+  -- Empty tables match the compact form (no dangling whitespace)
+  assert( json.encode({}, true) == "[]" )
+  assert( json.encode({ a = {} }, true) == '{\n  "a": []\n}' )
+end)
+
+
+test("encode pretty roundtrip", function()
+  local cases = {
+    { 1, 2, 3, { x = 10 } },
+    { name = "test", id = 231, ok = true, tags = { "a", "b" } },
+    { x = 1, y = 2, z = { 1, 2, 3 } },
+    { nested = { deep = { deeper = { "x\ny", "\t" } } } },
+    {},
+  }
+  for i, v in ipairs(cases) do
+    local enc = json.encode(v, true)
+    assert( enc:find("\n") or next(v) == nil,
+      fmt("pretty output for case %d should span multiple lines", i) )
+    assert( equal( v, json.decode(enc) ),
+      fmt("pretty roundtrip failed for case %d", i) )
+  end
+end)
+
+
+test("encode pretty configurable indent", function()
+  -- Default indent is two spaces, matching the library's concise style
+  assert( json.encode({ a = 1 }, true) == '{\n  "a": 1\n}' )
+  -- A numeric indent means that many spaces
+  assert( json.encode({ a = 1 }, { indent = 4 }) == '{\n    "a": 1\n}' )
+  assert( json.encode({ a = 1 }, { indent = 0 }) == '{\n"a": 1\n}' )
+  -- A string indent is used verbatim (eg. tabs)
+  assert( json.encode({ a = 1 }, { indent = "\t" }) == '{\n\t"a": 1\n}' )
+  -- The indent is genuinely configurable, not hardwired to two spaces
+  assert( json.encode({ a = 1 }, { indent = 4 }) ~= json.encode({ a = 1 }, true) )
+end)
+
+
+test("encode pretty configurable newline", function()
+  assert( json.encode({ a = 1 }, { newline = "\r\n" }) == '{\r\n  "a": 1\r\n}' )
+  assert( json.encode({ 1, 2 }, { newline = "\r\n" }) == '[\r\n  1,\r\n  2\r\n]' )
+end)
+
+
+test("encode pretty stable keys", function()
+  local t = { banana = 1, apple = 2, cherry = 3, date = 4 }
+  -- Keys are emitted in sorted order regardless of table hash ordering
+  assert( json.encode(t, true)
+    == '{\n  "apple": 2,\n  "banana": 1,\n  "cherry": 3,\n  "date": 4\n}' )
+  -- Encoding the same data twice yields byte-identical output
+  assert( json.encode(t, true) == json.encode(t, true) )
+end)
+
+
+test("encode pretty preserves errors", function()
+  -- Invalid tables must still raise, just like the compact encoder
+  local invalid = {
+    { x = 10, [1] = 2 },
+    { [1] = "a", [3] = "b" },
+    { [ function() end ] = 12 },
+  }
+  for i, v in ipairs(invalid) do
+    local status = pcall(json.encode, v, true)
+    assert( not status, fmt("pretty encoding idx %d did not error", i) )
+  end
+  -- Circular references must still be detected
+  local a = {}
+  a.self = a
+  assert( not pcall(json.encode, a, true), "circular reference not detected" )
+  -- Invalid numbers still raise
+  assert( not pcall(json.encode, math.huge, true) )
+end)
+
+
+test("encode pretty invalid options", function()
+  assert( not pcall(json.encode, { a = 1 }, "nope") )
+  assert( not pcall(json.encode, { a = 1 }, 5) )
+  assert( not pcall(json.encode, { a = 1 }, { indent = -1 }) )
+  assert( not pcall(json.encode, { a = 1 }, { indent = 1.5 }) )
+  assert( not pcall(json.encode, { a = 1 }, { indent = true }) )
+  assert( not pcall(json.encode, { a = 1 }, { newline = 5 }) )
+end)
