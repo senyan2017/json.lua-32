@@ -15,7 +15,9 @@ end
 
 
 local function equal(a, b)
-  -- Handle table
+  if a == json.null or b == json.null then
+    return a == b
+  end
   if type(a) == "table" and type(b) == "table" then
     for k in pairs(a) do
       if not equal(a[k], b[k]) then
@@ -29,7 +31,6 @@ local function equal(a, b)
     end
     return true
   end
-  -- Handle scalar
   return a == b
 end
 
@@ -60,8 +61,9 @@ test("literals", function()
   assert( json.encode(true) == "true" )
   assert( json.decode("false") == false )
   assert( json.encode(false) == "false" )
-  assert( json.decode("null") == nil )
+  assert( json.decode("null") == json.null )
   assert( json.encode(nil) == "null")
+  assert( json.encode(json.null) == "null")
 end)
 
 
@@ -94,6 +96,44 @@ end)
 test("objects", function()
   local t = { x = 10, y = 20, z = 30 }
   assert( equal( t, json.decode( json.encode(t) ) ) )
+end)
+
+
+test("null roundtrip array", function()
+  local t = json.decode('[1,null,3,null]')
+  assert( #t == 4 )
+  assert( t[1] == 1 )
+  assert( t[2] == json.null )
+  assert( t[3] == 3 )
+  assert( t[4] == json.null )
+  assert( json.encode(t) == '[1,null,3,null]' )
+end)
+
+
+test("null roundtrip object", function()
+  local t = json.decode('{"a":1,"b":null,"c":"x"}')
+  assert( t.a == 1 )
+  assert( t.b == json.null )
+  assert( t.c == "x" )
+  assert( json.encode(t) == '{"a":1,"b":null,"c":"x"}' or json.encode(t) == '{"a":1,"c":"x","b":null}' or json.encode(t) == '{"b":null,"a":1,"c":"x"}' or json.encode(t) == '{"b":null,"c":"x","a":1}' or json.encode(t) == '{"c":"x","a":1,"b":null}' or json.encode(t) == '{"c":"x","b":null,"a":1}' )
+end)
+
+
+test("null roundtrip nested", function()
+  local t = json.decode('{"x":[1,null,{"y":null}],"z":null}')
+  assert( t.x[1] == 1 )
+  assert( t.x[2] == json.null )
+  assert( t.x[3].y == json.null )
+  assert( t.z == json.null )
+  assert( equal(t, json.decode(json.encode(t))) )
+end)
+
+
+test("null sentinel distinct from nil", function()
+  local t = json.decode('{"value":null}')
+  assert( t.value ~= nil )
+  assert( t.value == json.null )
+  assert( json.null ~= nil )
 end)
 
 
@@ -219,9 +259,9 @@ end)
 
 test("encode invalid number", function()
   local t = {
-    math.huge,      -- inf
-    -math.huge,     -- -inf
-    math.huge * 0,  -- NaN
+    math.huge,
+    -math.huge,
+    math.huge * 0,
   }
   for i, v in ipairs(t) do
     local status, res = pcall(json.encode, v)
