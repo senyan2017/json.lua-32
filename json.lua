@@ -24,12 +24,64 @@
 
 local json = { _version = "0.1.2" }
 
+
+-------------------------------------------------------------------------------
+-- Shared utilities
+-------------------------------------------------------------------------------
+
+-- Build a set table from a list of values for O(1) membership checks
+local function create_set(...)
+  local res = {}
+  for i = 1, select("#", ...) do
+    res[ select(i, ...) ] = true
+  end
+  return res
+end
+
+-- Advance index past characters in (or not in) a set.
+-- When `negate` is true, skip characters that ARE in the set.
+-- When `negate` is false/nil, skip characters that are NOT in the set.
+-- Returns the first index that does not match the skip condition.
+local function skip_chars(str, idx, set, negate)
+  for i = idx, #str do
+    if set[str:sub(i, i)] ~= negate then
+      return i
+    end
+  end
+  return #str + 1
+end
+
+-- Character class sets used by both encoder and decoder
+local space_chars  = create_set(" ", "\t", "\r", "\n")
+local delim_chars  = create_set(" ", "\t", "\r", "\n", "]", "}", ",")
+
+
+-------------------------------------------------------------------------------
+-- Error handling
+-------------------------------------------------------------------------------
+
+-- Format a decode error with line/column info and raise it.
+local function decode_error(str, idx, msg)
+  local line = 1
+  local col  = 1
+  for i = 1, idx - 1 do
+    col = col + 1
+    if str:sub(i, i) == "\n" then
+      line = line + 1
+      col  = 1
+    end
+  end
+  error( string.format("%s at line %d col %d", msg, line, col) )
+end
+
+
 -------------------------------------------------------------------------------
 -- Encode
 -------------------------------------------------------------------------------
 
-local encode
+local encode  -- forward declaration for recursive calls
 
+-- Escape map for JSON string special characters
 local escape_char_map = {
   [ "\\" ] = "\\",
   [ "\"" ] = "\"",
@@ -46,13 +98,29 @@ for k, v in pairs(escape_char_map) do
 end
 
 
+-- Encode a single escape character
 local function escape_char(c)
   return "\\" .. (escape_char_map[c] or string.format("u%04x", c:byte()))
 end
 
 
-local function encode_nil(val)
+-- Type-specific encoders --------------------------------------------------
+
+local function encode_nil()
   return "null"
+end
+
+
+local function encode_string(val)
+  return '"' .. val:gsub('[%z\1-\31\\"]', escape_char) .. '"'
+end
+
+
+local function encode_number(val)
+  if val ~= val or val <= -math.huge or val >= math.huge then
+    error("unexpected number value '" .. tostring(val) .. "'")
+  end
+  return string.format("%.14g", val)
 end
 
 
@@ -60,13 +128,12 @@ local function encode_table(val, stack)
   local res = {}
   stack = stack or {}
 
-  -- Circular reference?
+  -- Circular reference check
   if stack[val] then error("circular reference") end
-
   stack[val] = true
 
   if rawget(val, 1) ~= nil or next(val) == nil then
-    -- Treat as array -- check keys are valid and it is not sparse
+    -- Treat as array: validate keys are sequential integers
     local n = 0
     for k in pairs(val) do
       if type(k) ~= "number" then
@@ -77,15 +144,14 @@ local function encode_table(val, stack)
     if n ~= #val then
       error("invalid table: sparse array")
     end
-    -- Encode
     for i, v in ipairs(val) do
-      table.insert(res, encode(v, stack))
+      res[i] = encode(v, stack)
     end
     stack[val] = nil
     return "[" .. table.concat(res, ",") .. "]"
 
   else
-    -- Treat as an object
+    -- Treat as object: validate keys are strings
     for k, v in pairs(val) do
       if type(k) ~= "string" then
         error("invalid table: mixed or invalid key types")
@@ -98,21 +164,8 @@ local function encode_table(val, stack)
 end
 
 
-local function encode_string(val)
-  return '"' .. val:gsub('[%z\1-\31\\"]', escape_char) .. '"'
-end
-
-
-local function encode_number(val)
-  -- Check for NaN, -inf and inf
-  if val ~= val or val <= -math.huge or val >= math.huge then
-    error("unexpected number value '" .. tostring(val) .. "'")
-  end
-  return string.format("%.14g", val)
-end
-
-
-local type_func_map = {
+-- Type dispatch table for encoding
+local encode_type_map = {
   [ "nil"     ] = encode_nil,
   [ "table"   ] = encode_table,
   [ "string"  ] = encode_string,
@@ -121,9 +174,10 @@ local type_func_map = {
 }
 
 
+-- Main encode dispatcher
 encode = function(val, stack)
   local t = type(val)
-  local f = type_func_map[t]
+  local f = encode_type_map[t]
   if f then
     return f(val, stack)
   end
@@ -140,51 +194,17 @@ end
 -- Decode
 -------------------------------------------------------------------------------
 
-local parse
+local parse  -- forward declaration for recursive calls
 
-local function create_set(...)
-  local res = {}
-  for i = 1, select("#", ...) do
-    res[ select(i, ...) ] = true
-  end
-  return res
-end
+-- Literal values
+local literals     = create_set("true", "false", "null")
+local literal_map  = { ["true"] = true, ["false"] = false, ["null"] = nil }
 
-local space_chars   = create_set(" ", "\t", "\r", "\n")
-local delim_chars   = create_set(" ", "\t", "\r", "\n", "]", "}", ",")
-local escape_chars  = create_set("\\", "/", '"', "b", "f", "n", "r", "t", "u")
-local literals      = create_set("true", "false", "null")
-
-local literal_map = {
-  [ "true"  ] = true,
-  [ "false" ] = false,
-  [ "null"  ] = nil,
-}
+-- Escape characters valid in JSON strings
+local escape_chars = create_set("\\", "/", '"', "b", "f", "n", "r", "t", "u")
 
 
-local function next_char(str, idx, set, negate)
-  for i = idx, #str do
-    if set[str:sub(i, i)] ~= negate then
-      return i
-    end
-  end
-  return #str + 1
-end
-
-
-local function decode_error(str, idx, msg)
-  local line_count = 1
-  local col_count = 1
-  for i = 1, idx - 1 do
-    col_count = col_count + 1
-    if str:sub(i, i) == "\n" then
-      line_count = line_count + 1
-      col_count = 1
-    end
-  end
-  error( string.format("%s at line %d col %d", msg, line_count, col_count) )
-end
-
+-- Unicode helpers ----------------------------------------------------------
 
 local function codepoint_to_utf8(n)
   -- http://scripts.sil.org/cms/scripts/page.php?site_id=nrsi&id=iws-appendixa
@@ -204,16 +224,18 @@ end
 
 
 local function parse_unicode_escape(s)
-  local n1 = tonumber( s:sub(1, 4),  16 )
-  local n2 = tonumber( s:sub(7, 10), 16 )
-   -- Surrogate pair?
+  local n1 = tonumber(s:sub(1, 4), 16)
+  local n2 = tonumber(s:sub(7, 10), 16)
   if n2 then
+    -- Surrogate pair
     return codepoint_to_utf8((n1 - 0xd800) * 0x400 + (n2 - 0xdc00) + 0x10000)
   else
     return codepoint_to_utf8(n1)
   end
 end
 
+
+-- Type-specific parsers ----------------------------------------------------
 
 local function parse_string(str, i)
   local res = ""
@@ -226,7 +248,7 @@ local function parse_string(str, i)
     if x < 32 then
       decode_error(str, j, "control character in string")
 
-    elseif x == 92 then -- `\`: Escape
+    elseif x == 92 then -- `\`: escape sequence
       res = res .. str:sub(k, j - 1)
       j = j + 1
       local c = str:sub(j, j)
@@ -244,7 +266,7 @@ local function parse_string(str, i)
       end
       k = j + 1
 
-    elseif x == 34 then -- `"`: End of string
+    elseif x == 34 then -- `"`: end of string
       res = res .. str:sub(k, j - 1)
       return res, j + 1
     end
@@ -257,7 +279,7 @@ end
 
 
 local function parse_number(str, i)
-  local x = next_char(str, i, delim_chars)
+  local x = skip_chars(str, i, delim_chars)
   local s = str:sub(i, x - 1)
   local n = tonumber(s)
   if not n then
@@ -268,7 +290,7 @@ end
 
 
 local function parse_literal(str, i)
-  local x = next_char(str, i, delim_chars)
+  local x = skip_chars(str, i, delim_chars)
   local word = str:sub(i, x - 1)
   if not literals[word] then
     decode_error(str, i, "invalid literal '" .. word .. "'")
@@ -281,20 +303,20 @@ local function parse_array(str, i)
   local res = {}
   local n = 1
   i = i + 1
-  while 1 do
-    local x
-    i = next_char(str, i, space_chars, true)
-    -- Empty / end of array?
+  while true do
+    i = skip_chars(str, i, space_chars, true)
+    -- Empty or end of array?
     if str:sub(i, i) == "]" then
       i = i + 1
       break
     end
-    -- Read token
+    -- Parse value
+    local x
     x, i = parse(str, i)
     res[n] = x
     n = n + 1
-    -- Next token
-    i = next_char(str, i, space_chars, true)
+    -- Expect ',' or ']'
+    i = skip_chars(str, i, space_chars, true)
     local chr = str:sub(i, i)
     i = i + 1
     if chr == "]" then break end
@@ -307,31 +329,31 @@ end
 local function parse_object(str, i)
   local res = {}
   i = i + 1
-  while 1 do
-    local key, val
-    i = next_char(str, i, space_chars, true)
-    -- Empty / end of object?
+  while true do
+    i = skip_chars(str, i, space_chars, true)
+    -- Empty or end of object?
     if str:sub(i, i) == "}" then
       i = i + 1
       break
     end
-    -- Read key
+    -- Parse key (must be a string)
     if str:sub(i, i) ~= '"' then
       decode_error(str, i, "expected string for key")
     end
+    local key
     key, i = parse(str, i)
-    -- Read ':' delimiter
-    i = next_char(str, i, space_chars, true)
+    -- Expect ':'
+    i = skip_chars(str, i, space_chars, true)
     if str:sub(i, i) ~= ":" then
       decode_error(str, i, "expected ':' after key")
     end
-    i = next_char(str, i + 1, space_chars, true)
-    -- Read value
+    i = skip_chars(str, i + 1, space_chars, true)
+    -- Parse value
+    local val
     val, i = parse(str, i)
-    -- Set
     res[key] = val
-    -- Next token
-    i = next_char(str, i, space_chars, true)
+    -- Expect ',' or '}'
+    i = skip_chars(str, i, space_chars, true)
     local chr = str:sub(i, i)
     i = i + 1
     if chr == "}" then break end
@@ -341,7 +363,8 @@ local function parse_object(str, i)
 end
 
 
-local char_func_map = {
+-- Character dispatch table for decoding
+local parse_char_map = {
   [ '"' ] = parse_string,
   [ "0" ] = parse_number,
   [ "1" ] = parse_number,
@@ -362,9 +385,10 @@ local char_func_map = {
 }
 
 
+-- Main parse dispatcher
 parse = function(str, idx)
   local chr = str:sub(idx, idx)
-  local f = char_func_map[chr]
+  local f = parse_char_map[chr]
   if f then
     return f(str, idx)
   end
@@ -376,8 +400,8 @@ function json.decode(str)
   if type(str) ~= "string" then
     error("expected argument of type string, got " .. type(str))
   end
-  local res, idx = parse(str, next_char(str, 1, space_chars, true))
-  idx = next_char(str, idx, space_chars, true)
+  local res, idx = parse(str, skip_chars(str, 1, space_chars, true))
+  idx = skip_chars(str, idx, space_chars, true)
   if idx <= #str then
     decode_error(str, idx, "trailing garbage")
   end
