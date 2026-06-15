@@ -34,8 +34,18 @@ json.decode('[1,2,3,{"x":10}]') -- Returns { 1, 2, 3, { x = 10 } }
 * Trying to encode values which are unrepresentable in JSON will never result
   in type conversion or other magic: sparse arrays, tables with mixed key types
   or invalid numbers (NaN, -inf, inf) will raise an error
-* `null` values contained within an array or object are converted to `nil` and
-  are therefore lost upon decoding
+* JSON `null` is represented by the sentinel value `json.null` (a distinct
+  table reference), **not** Lua `nil`. This ensures that `null` fields in
+  objects and arrays survive a decode → encode round trip. Compare against
+  `json.null` to check for null values:
+  ```lua
+  local t = json.decode('{"a": 1, "b": null}')
+  if t.b == json.null then
+    print("b is null")
+  end
+  ```
+  Encoding Lua `nil` still produces JSON `null` for convenience, but note
+  that `nil` values stored in tables are invisible to Lua and will be lost.
 * *Pretty* encoding is not supported, `json.encode()` only encodes to a compact
   format
 

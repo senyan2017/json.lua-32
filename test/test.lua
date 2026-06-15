@@ -15,6 +15,9 @@ end
 
 
 local function equal(a, b)
+  -- Handle json.null sentinel
+  if a == json.null and b == json.null then return true end
+  if a == json.null or b == json.null then return false end
   -- Handle table
   if type(a) == "table" and type(b) == "table" then
     for k in pairs(a) do
@@ -60,8 +63,9 @@ test("literals", function()
   assert( json.encode(true) == "true" )
   assert( json.decode("false") == false )
   assert( json.encode(false) == "false" )
-  assert( json.decode("null") == nil )
+  assert( json.decode("null") == json.null )
   assert( json.encode(nil) == "null")
+  assert( json.encode(json.null) == "null")
 end)
 
 
@@ -242,4 +246,68 @@ test("encode escape", function()
     local res = json.encode(k)
     assert( res == v, fmt("'%s' was not escaped properly", k) )
   end
+end)
+
+
+test("null round trip - array", function()
+  local src = '[1,null,3]'
+  local decoded = json.decode(src)
+  -- Length must be preserved (middle null must not collapse the array)
+  assert( #decoded == 3, fmt("expected length 3, got %d", #decoded) )
+  assert( decoded[1] == 1 )
+  assert( decoded[2] == json.null )
+  assert( decoded[3] == 3 )
+  -- Re-encode must produce the original JSON
+  local re = json.encode(decoded)
+  assert( re == src, fmt("expected '%s', got '%s'", src, re) )
+end)
+
+
+test("null round trip - object", function()
+  local src = '{"a":1,"b":null,"c":"x"}'
+  local decoded = json.decode(src)
+  assert( decoded.a == 1 )
+  assert( decoded.b == json.null )
+  assert( decoded.c == "x" )
+  -- The key "b" must still exist
+  assert( decoded["b"] ~= nil, "null field 'b' was lost" )
+  -- Round-trip: decode then encode
+  local re = json.encode(decoded)
+  local decoded2 = json.decode(re)
+  assert( equal(decoded, decoded2), "object round trip mismatch" )
+end)
+
+
+test("null round trip - nested", function()
+  local src = '{"x":[1,null,{"y":null}],"z":null}'
+  local decoded = json.decode(src)
+  assert( decoded.x[1] == 1 )
+  assert( decoded.x[2] == json.null )
+  assert( decoded.x[3].y == json.null )
+  assert( decoded.z == json.null )
+  local re = json.encode(decoded)
+  local decoded2 = json.decode(re)
+  assert( equal(decoded, decoded2), "nested round trip mismatch" )
+end)
+
+
+test("null in all positions", function()
+  -- null at head, middle and tail of an array
+  local src = '[null,1,null,2,null]'
+  local decoded = json.decode(src)
+  assert( #decoded == 5, fmt("expected length 5, got %d", #decoded) )
+  assert( decoded[1] == json.null )
+  assert( decoded[2] == 1 )
+  assert( decoded[3] == json.null )
+  assert( decoded[4] == 2 )
+  assert( decoded[5] == json.null )
+  local re = json.encode(decoded)
+  assert( re == src, fmt("expected '%s', got '%s'", src, re) )
+end)
+
+
+test("null is not nil", function()
+  -- json.null and Lua nil must be distinguishable
+  assert( json.null ~= nil, "json.null must not equal Lua nil" )
+  assert( type(json.null) == "table", "json.null must be a table sentinel" )
 end)
